@@ -1,0 +1,27 @@
+[project]
+name = "projectx"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Your Name",email = "you@example.com"}
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi (>=0.141.1,<0.142.0)",
+    "uvicorn (>=0.53.0,<0.54.0)",
+    "pydantic[email] (>=2.13.5,<3.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
+[tool.mypy]
+python_executable = ".venv/bin/python"
+
+[tool.poetry]
+package-mode = false

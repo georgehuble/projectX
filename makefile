@@ -25,9 +25,15 @@ migrate:
 	poetry run alembic revision --autogenerate -m "$(m)"
 
 # Запустить приложение
-run:
-	poetry run python -m main
+ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
+.PHONY: run $(ARGS)
+
+run:
+	poetry run python $(ARGS)
+
+$(ARGS):
+	@:
 # Зайти в shell окружения poetry
 shell:
 	poetry shell

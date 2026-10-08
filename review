@@ -1,0 +1,217 @@
+#TODO произвести организацию импортов
+#TODO разделить код на зоны ответственности: логги / конфиг БД / Модели ДБ / FastAPI / тесты
+
+import asyncio
+import httpx
+import pytest
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
+from http import HTTPStatus
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer, String, JSON, ForeignKey
+from contextlib import asynccontextmanager
+import logging
+from typing import AsyncGenerator
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+#TODO вынести значения переменных в .env файл
+DATABASE_URL = "postgresql+asyncpg://user:password@localhost/db"
+EXTERNAL_API_URL = "https://external-api.local/process"
+EXTERNAL_API_TOKEN = "supersecrettoken"
+
+#TODO вынести в отдельный конфиг для БД
+engine = create_async_engine(DATABASE_URL, echo=True)
+
+#TODO вынести в отдельный конфиг для БД
+SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+#TODO вынести в отдельный конфиг для БД
+Base = declarative_base()
+
+#TODO модель бд вынести в отдельный файл
+class User(Base):
+#TODO комментарии излишние, из имени функции всё понятно
+    """
+    Модель пользователя.
+    """
+
+    __tablename__ = "users"
+
+    id: int = Column(Integer, primary_key=True)
+    name: str = Column(String)
+    email: str = Column(String)
+
+
+#TODO привести в 3 нормальную форму
+class Order(Base):
+#TODO комментарии излишние, из имени функции всё понятно
+    """
+    Модель заказа.
+    """
+
+    __tablename__ = "orders"
+
+    id: int = Column(Integer, primary_key=True)
+    #TODO зачем нам столько id? Есть ли foreigh_key?
+    external_id: int = Column(Integer)
+    #TODO создать отдельную таблицу user
+    user_id: int = Column(Integer)
+    #TODO установить ограничение символов
+    description: str = Column(String)
+    data = Column(JSON)
+
+
+#TODO вынести логику клиента в отдельный файл
+class ExternalServiceClient:
+#TODO комментарии излишние, из имени функции всё понятно
+    """
+    Клиент для вызова внешнего API.
+    """
+
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url
+        self.token = token
+
+    async def get_order(self, order_id: int) -> dict:
+	#TODO удалить комментарий
+        """
+        Получает заказ из внешнего API.
+        Возвращает ответ в виде JSON или поднимает исключение HTTPException.
+        """
+        headers = {"Authorization": f"Bearer {self.token}"}
+	#TODO берем только AsyncClient, импортировать весь модуль httpx не надо
+        async with httpx.AsyncClient() as client:
+	    #TODO f"{self.base_url}/{order_id}", headers=headers - вынести в отдельную переменную
+            response = await client.get(f"{self.base_url}/{order_id}", headers=headers) 
+            if response.status_code == HTTPStatus.OK:
+                return response.json()
+            else:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+
+    async def process_order(self, order_id: int) -> None:
+		#TODO сократить комментарий: до "Обработка заказа"
+        """
+        Вызывает обработку заказа во внешнем API.
+        """
+        headers = {"Authorization": f"Bearer {self.token}"}
+	#TODO берем только AsyncClient, импортировать весь модуль httpx не надо
+        async with httpx.AsyncClient() as client:
+	    #TODO f"{self.base_url}/{order_id}", headers=headers - вынести в отдельную переменную
+            await client.post(f"{self.base_url}/{order_id}", headers=headers)
+
+#TODO почему это глобальная переменная? Положить внутрь async def submit_data
+external_client = ExternalServiceClient(EXTERNAL_API_URL, EXTERNAL_API_TOKEN)
+
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+	#TODO комментарий убрать
+    """
+    Контекстный менеджер для асинхронной сессии БД.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        await session.close()
+
+#TODO вынести в отдельный файл для логирования, использовать модуль logging
+def log_execution(func):
+	#TODO убрать коммент
+    """
+    Логирует вызов функции.
+    """
+
+    def wrapper(*args, **kwargs):
+        logger.info(f"Calling {func.__name__}")
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+@log_execution
+#TODO какой статус ожидается? status_code=status.HTTP....
+@app.post("/submit")
+#TODO Используй Annotated
+async def submit_data(request: Request):
+    """
+    Приём данных заказа и пользователя.
+    """
+    data = await request.json()
+    user_data = data["user"]
+    order_data = data["order"]
+
+    async with get_session() as session:
+        user = User(name=user_data["name"], email=user_data["email"])
+        session.add(user)
+
+        if await external_client.get_order(order_data["exteranal_id"]):
+            order = Order(
+                exteranal_id=order_data["exteranal_id"],
+                description=order_data["description"],
+                data=order_data["data"],
+                user=user,
+            )
+            session.add(order)
+
+            await external_client.process_order(order.external_id)
+
+
+client = TestClient(app)
+
+
+#TODO тесты в отдельный файл
+@pytest.mark.parametrize(
+    "user_data,order_data,expected",
+    [
+        (
+            {"name": "John", "email": "john@example.com"},
+            {"exteranal_id": 123, "description": "Test", "data": {}},
+            200,
+        ),
+        (
+            {"name": "Jane", "email": "jane@example.com"},
+            {"exteranal_id": 124, "description": "Test2", "data": {"key": "value"}},
+            200,
+        ),
+    ],
+)
+
+#TODO тесты в отдельный файл
+def test_submit_data(user_data, order_data, expected):
+    """Тест для проверки отправки данных"""
+    test_case = {"user": user_data, "order": order_data}
+
+    if len(user_data["name"]) > 3:
+        if "key" in order_data["data"] or len(order_data["data"]) == 0:
+            response = client.post("/submit", json=test_case)
+
+            if expected == 200:
+                if response.status_code < 400:
+                    assert True
+                else:
+                    assert False
+            else:
+                pass
+
+#TODO тесты в отдельный файл
+def process_order_test():
+    """Тест для обработки заказа"""
+    client_instance = ExternalServiceClient("https://httpbin.org/get", "test-token")
+
+    try:
+        result = asyncio.run(client_instance.get_order(123))
+        assert result is not None
+    #TODO Exception зачем?
+    except Exception:
+        pass
+
+    try:
+        asyncio.run(client_instance.process_order(123))
+    except:
+        pass
